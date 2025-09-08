@@ -1,0 +1,45 @@
+so since I am using the alb controller when i tried to deploy it using ingress path in my eks 
+the home page i was able to access and login successfully but after logging in , it just keeps on loading and nothing happens
+ChatGPT said:
+
+Ahh 👍 that makes sense — you’re hitting a classic jBPM (and KIE/Drools) issue when fronted by an Ingress/ALB.
+
+Here’s why:
+
+Business Central (Workbench) is a GWT (Google Web Toolkit) app that makes a ton of AJAX calls.
+
+By default, it generates absolute URLs like http://<pod-ip>:8080/business-central/... instead of respecting the Ingress hostname.
+
+When you use ALB Ingress, those callbacks fail (because browsers can’t reach pod IPs directly), so after login you just see a spinner.
+
+✅ Fix: Tell jBPM to use the external hostname/path
+
+You need to set -Dorg.kie.workbench.context (and related system properties) so that Business Central generates the right URLs.
+
+Update Business Central Deployment
+
+Add this to the containers.env section of the Business Central deployment:
+
+- name: JAVA_OPTS_APPEND
+  value: >
+    -Dorg.kie.server.location=http://<YOUR-DOMAIN>/kieserver/services/rest/server
+    -Dorg.kie.workbench.context=http://<YOUR-DOMAIN>/business-central
+    -Dorg.uberfire.nio.git.dir=/opt/jboss/wildfly/standalone/data/git
+
+
+Where <YOUR-DOMAIN> is the host you set in the Ingress (e.g. jbpm.mydomain.com).
+
+Example Snippet:
+containers:
+  - name: business-central
+    image: quay.io/kiegroup/business-central-workbench:7.73.0.Final
+    ports:
+      - containerPort: 8080
+    envFrom:
+      - secretRef:
+          name: jbpm-credentials
+    env:
+      - name: JAVA_OPTS_APPEND
+        value: >
+          -Dorg.kie.server.location=http://jbpm.mydomain.com/kieserver/services/rest/server
+          -Dorg.kie.workbench.context=http://jbpm.mydomain.com/business-central
