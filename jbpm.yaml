@@ -1,0 +1,139 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jbpm
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jbpm-credentials
+  namespace: jbpm
+type: Opaque
+stringData:
+  # Business Central admin (must have roles: admin/rest-all)
+  BC_ADMIN_USER: "admin"
+  BC_ADMIN_PWD: "admin123!"
+  # KIE Server service user (BC uses this to talk to KIE)
+  KIE_SERVER_USER: "kieserver"
+  KIE_SERVER_PWD: "kieserver123!"
+  # Controller creds (KIE uses these to register with BC)
+  CONTROLLER_USER: "admin"
+  CONTROLLER_PWD: "admin123!"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: business-central
+  namespace: jbpm
+  labels: { app: business-central }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: business-central }
+  template:
+    metadata:
+      labels: { app: business-central }
+    spec:
+      containers:
+        - name: business-central
+          # You may pin a specific tag; 'latest' keeps the example simple.
+          image: jboss/business-central-workbench:7.59.0.Final
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            # Admin user for logging into Business Central (Workbench)
+            - name: KIE_ADMIN_USER
+              valueFrom: { secretKeyRef: { name: jbpm-credentials, key: BC_ADMIN_USER } }
+            - name: KIE_ADMIN_PWD
+              valueFrom: { secretKeyRef: { name: jbpm-credentials, key: BC_ADMIN_PWD } }
+            # Additional environment variables that may be needed
+            - name: WORKBENCH_ADMIN_USER
+              valueFrom: { secretKeyRef: { name: jbpm-credentials, key: BC_ADMIN_USER } }
+            - name: WORKBENCH_ADMIN_PWD
+              valueFrom: { secretKeyRef: { name: jbpm-credentials, key: BC_ADMIN_PWD } }
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits:   { cpu: "2",    memory: "4Gi" }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: business-central
+  namespace: jbpm
+  labels: { app: business-central }
+spec:
+  type: LoadBalancer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  selector: { app: business-central }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kie-server
+  namespace: jbpm
+  labels: { app: kie-server }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: kie-server }
+  template:
+    metadata:
+      labels: { app: kie-server }
+    spec:
+      containers:
+        - name: kie-server
+          image: quay.io/kiegroup/kie-server-showcase:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            # A unique id for this KIE server
+            - name: KIE_SERVER_ID
+              value: "eks-kieserver-1"
+
+            # Where this KIE Server can be reached (from Business Central)
+            # Using the ClusterIP service name for in-cluster reachability.
+            - name: KIE_SERVER_LOCATION
+              value: "http://kie-server:8080/kie-server/services/rest/server"
+
+            # Tell KIE Server how to reach the Business Central controller
+            - name: KIE_SERVER_CONTROLLER
+              value: "http://business-central:8080/business-central/rest/controller"
+
+            # Credentials KIE uses to register with Business Central controller
+            - name: KIE_SERVER_CONTROLLER_USER
+              valueFrom: { secretKeyRef: { name: jbpm-credentials, key: CONTROLLER_USER } }
+            - name: KIE_SERVER_CONTROLLER_PWD
+              valueFrom: { secretKeyRef: { name: jbpm-credentials, key: CONTROLLER_PWD } }
+
+            # Credentials Business Central will use to call back this KIE Server
+            - name: KIE_SERVER_USER
+              valueFrom: { secretKeyRef: { name: jbpm-credentials, key: KIE_SERVER_USER } }
+            - name: KIE_SERVER_PWD
+              valueFrom: { secretKeyRef: { name: jbpm-credentials, key: KIE_SERVER_PWD } }
+
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits:   { cpu: "2",    memory: "4Gi" }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kie-server
+  namespace: jbpm
+  labels: { app: kie-server }
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  selector: { app: kie-server }
